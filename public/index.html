@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartHome Control</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+    import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA2wU4qY_5zXRenCOpSpyq4hj3ewAa7lCs",
+      authDomain: "team14-iot.firebaseapp.com",
+      databaseURL: "https://team14-iot-default-rtdb.firebaseio.com",
+      projectId: "team14-iot",
+      messagingSenderId: "531197922402",
+      appId: "1:531197922402:web:ea0ac2a1aaa185fcbf953b"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+    const auth = getAuth(app);
+    const stateRef = ref(db, "smartHomeState");
+
+    let currentState = { led1: false, led2: false, led3: false, tv: false, kill: false };
+    let firebaseConnected = false;
+
+    signInWithEmailAndPassword(auth, "test@smart.home", "test123456")
+      .then(() => { firebaseConnected = true; updateStatusDot(); })
+      .catch(() => { firebaseConnected = true; updateStatusDot(); });
+
+    onValue(stateRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const v = snapshot.val();
+        currentState = {
+          led1: v.led1 || false, led2: v.led2 || false, led3: v.led3 || false,
+          tv: v.tv || false, kill: v.kill || false
+        };
+        updateUI();
+        firebaseConnected = true;
+        updateStatusDot();
+      }
+    }, () => { firebaseConnected = false; updateStatusDot(); });
+
+    // ---- Device Commands ----
+    window.toggleDevice = function(dev) {
+      const val = !currentState[dev];
+      set(ref(db, `smartHomeState/${dev}`), val);
+      if (val && currentState.kill) set(ref(db, "smartHomeState/kill"), false);
+      toast(`${deviceLabel(dev)} turned ${val ? 'ON' : 'OFF'}`, val ? 'on' : 'off');
+    };
+
+    window.allOn = function() {
+      update(ref(db, "smartHomeState"), { led1: true, led2: true, led3: true, tv: true, kill: false });
+      toast("All devices ON", "on");
+    };
+
+    window.allOff = function() {
+      update(ref(db, "smartHomeState"), { led1: false, led2: false, led3: false, tv: false });
+      toast("All devices OFF", "off");
+    };
+
+    window.emergencyStop = function() {
+      if (!confirm("EMERGENCY STOP — Shut everything down?")) return;
+      update(ref(db, "smartHomeState"), { led1: false, led2: false, led3: false, tv: false, kill: true });
+      cancelTimer();
+      toast("EMERGENCY STOP", "danger");
+    };
+
+    window.resetAll = function() {
+      if (!confirm("Reset system to defaults?")) return;
+      set(ref(db, "smartHomeState"), { led1: false, led2: false, led3: false, tv: false, kill: false, timer: null });
+      cancelTimer();
+      toast("System reset", "off");
+    };
+
+    function deviceLabel(d) {
+      return { led1: "Living Room", led2: "Bedroom", led3: "Kitchen", tv: "TV" }[d] || d;
+    }
+
+    // ---- Timer (Firebase-based, works in APK) ----
+    let timerPoll = null;
+    let localTimerTimeout = null;
+
+    window.startTimer = async function() {
+      const devs = [...document.querySelectorAll('.t-check:checked')].map(c => c.value);
+      if (!devs.length) { toast("Pick at least one device", "danger"); return; }
+      const h = parseInt(document.getElementById('th').value) || 0;
+      const m = parseInt(document.getElementById('tm').value) || 0;
+      const s = parseInt(document.getElementById('ts').value) || 0;
+      const dur = h * 3600 + m * 60 + s;
+      if (dur < 1) { toast("Set a valid time", "danger"); return; }
+      const act = document.getElementById('t-action').value;
+
+      const timerData = {
+        id: 'timer_' + Date.now(),
+        devices: devs,
+        duration: dur,
+        action: act,
+        startedAt: Date.now(),
+        endsAt: Date.now() + (dur * 1000),
+        active: true
+      };
+
+      await set(ref(db, "smartHomeState/timer"), timerData);
+      toast(`Timer: ${fmtDur(dur)}`, 'on');
+      startLocalTimer(timerData);
+    };
+
+    function startLocalTimer(timerData) {
+      stopLocalTimer();
+      pollTimerStart();
+
+      const remaining = Math.max(0, timerData.endsAt - Date.now());
+      localTimerTimeout = setTimeout(async () => {
+        const updates = {};
+        timerData.devices.forEach(d => { updates[d] = timerData.action === 'on'; });
+        if (timerData.action === 'on') updates.kill = false;
+        updates.timer = null;
+        await update(ref(db, "smartHomeState"), updates);
+        pollTimerStop();
+        renderTimer(null);
+        toast(`Timer done — devices ${timerData.action === 'on' ? 'ON' : 'OFF'}`, timerData.action === 'on' ? 'on' : 'off');
+      }, remaining);
+    }
+
+    function stopLocalTimer() {
+      if (localTimerTimeout) { clearTimeout(localTimerTimeout); localTimerTimeout = null; }
+    }
+
+    window.cancelTimer = async function() {
+      stopLocalTimer();
+      await set(ref(db, "smartHomeState/timer"), null);
+      pollTimerStop();
+      renderTimer(null);
+      toast("Timer cancelled", "off");
+    };
+
+    function pollTimerStart() { pollTimerStop(); doPoll(); timerPoll = setInterval(doPoll, 1000); }
+    function pollTimerStop() { if (timerPoll) { clearInterval(timerPoll); timerPoll = null; } }
+
+    function doPoll() {
+      // Read timer from local state (Firebase listener keeps it updated)
+      const timerRef2 = ref(db, "smartHomeState/timer");
+      onValue(timerRef2, (snap) => {
+        const timer = snap.val();
+        if (timer && timer.active) {
+          const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
+          if (remaining <= 0) {
+            renderTimer(null);
+            pollTimerStop();
+          } else {
+            renderTimer({ ...timer, remaining });
+          }
+        } else {
+          renderTimer(null);
+          pollTimerStop();
+        }
+      }, { onlyOnce: true });
+    }
+
+    function renderTimer(t) {
+      const running = document.getElementById('timer-running');
+      const setup = document.getElementById('timer-setup');
+      if (t && t.active) {
+        running.style.display = 'block'; setup.style.display = 'none';
+        document.getElementById('t-countdown').textContent = fmtDur(t.remaining);
+        const pct = Math.min(100, ((t.duration - t.remaining) / t.duration) * 100);
+        document.getElementById('t-bar').style.width = pct + '%';
+        const labels = { led1: 'Living Room', led2: 'Bedroom', led3: 'Kitchen', tv: 'TV' };
+        document.getElementById('t-devs').textContent = t.devices.map(x => labels[x] || x).join(', ');
+        const ab = document.getElementById('t-act-badge');
+        ab.textContent = t.action === 'on' ? 'Turn ON' : 'Turn OFF';
+        ab.className = 'act-badge ' + (t.action === 'on' ? 'badge-on' : 'badge-off');
+      } else {
+        running.style.display = 'none'; setup.style.display = 'block';
+      }
+    }
+
+    function fmtDur(s) {
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+      return `${m}:${String(sec).padStart(2,'0')}`;
+    }
+
+    // ---- UI ----
+    function updateUI() {
+      ['led1', 'led2', 'led3', 'tv'].forEach(d => {
+        const card = document.getElementById(`dev-${d}`);
+        const sw = document.getElementById(`sw-${d}`);
+        const status = card ? card.querySelector('.dev-status') : null;
+        if (!card || !sw) return;
+        sw.checked = currentState[d];
+        card.classList.toggle('on', currentState[d]);
+        if (status) {
+          status.textContent = currentState[d] ? 'ACTIVE' : 'STANDBY';
+        }
+      });
+
+      const cnt = [currentState.led1, currentState.led2, currentState.led3, currentState.tv].filter(Boolean).length;
+      const el = document.getElementById('dev-count');
+      if (el) el.textContent = `${cnt}/4`;
+
+      const kb = document.getElementById('kill-indicator');
+      if (kb) kb.style.display = currentState.kill ? 'flex' : 'none';
+    }
+
+    function updateStatusDot() {
+      const dot = document.getElementById('fb-dot');
+      const label = document.getElementById('fb-label');
+      if (dot) dot.className = 'dot ' + (firebaseConnected ? 'green' : 'red');
+      if (label) label.textContent = firebaseConnected ? 'Connected' : 'Disconnected';
+    }
+
+    // ---- Toast ----
+    window.toast = function(msg, type = 'on') {
+      const c = document.getElementById('toasts');
+      const t = document.createElement('div');
+      t.className = `toast-msg t-${type}`;
+      const icons = { on: 'fa-circle-check', off: 'fa-circle-xmark', danger: 'fa-triangle-exclamation' };
+      t.innerHTML = `<i class="fa-solid ${icons[type] || icons.on}"></i>${msg}`;
+      c.appendChild(t);
+      requestAnimationFrame(() => t.classList.add('visible'));
+      setTimeout(() => { t.classList.add('leaving'); setTimeout(() => t.remove(), 400); }, 2800);
+    };
+
+    // ---- Login ----
+    window.doLogin = function() {
+      const id = document.getElementById('inp-id').value.trim();
+      const pw = document.getElementById('inp-pw').value.trim();
+      const err = document.getElementById('login-err');
+      if (id === '012' && pw === '1') {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'flex';
+        sessionStorage.setItem('sh_auth', '1');
+      } else {
+        err.textContent = 'Wrong ID or password';
+        err.style.display = 'block';
+        document.getElementById('inp-pw').value = '';
+      }
+    };
+
+    if (sessionStorage.getItem('sh_auth') === '1') {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'flex';
+    }
+
+    window.doLogout = function() {
+      sessionStorage.removeItem('sh_auth');
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('login-screen').style.display = 'flex';
+    };
+
+    document.getElementById('inp-id').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+    document.getElementById('inp-pw').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+    // Clock
+    function tick() {
+      const now = new Date();
+      const el = document.getElementById('clock');
+      if (el) el.textContent = now.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit' });
+      const del = document.getElementById('date-line');
+      if (del) del.textContent = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    setInterval(tick, 1000); tick();
+
+    // Check timer on load
+    setTimeout(() => {
+      onValue(ref(db, "smartHomeState/timer"), (snap) => {
+        const timer = snap.val();
+        if (timer && timer.active) {
+          const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
+          if (remaining > 0) {
+            startLocalTimer(timer);
+          }
+        }
+      }, { onlyOnce: true });
+    }, 1200);
+
+    // Active tab
+    window.switchTab = function(tab) {
+      document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById('tab-' + tab).style.display = 'block';
+      document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    };
+  </script>
+
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0e1a;
+      --bg2: #111827;
+      --card: rgba(0, 255, 255, 0.04);
+      --card-border: rgba(0, 255, 255, 0.25);
+      --sidebar: #060a14;
+      --sidebar-hover: #111827;
+      --primary: #00ffff;
+      --primary-light: #67e8f9;
+      --accent: #ff00ff;
+      --accent-light: #e879f9;
+      --success: #00ff88;
+      --danger: #ff3355;
+      --warn: #ffaa00;
+      --text: #e0f2fe;
+      --text2: #94a3b8;
+      --text3: #64748b;
+      --border: rgba(0, 255, 255, 0.15);
+      --radius: 14px;
+      --shadow: 0 0 15px rgba(0, 255, 255, 0.08), 0 4px 12px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 0 30px rgba(0, 255, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.4);
+      --glow-cyan: 0 0 20px rgba(0, 255, 255, 0.3);
+      --glow-magenta: 0 0 20px rgba(255, 0, 255, 0.3);
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background:
+        radial-gradient(ellipse at 15% 50%, rgba(0, 255, 255, 0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 85% 20%, rgba(255, 0, 255, 0.03) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 90%, rgba(0, 255, 255, 0.02) 0%, transparent 50%);
+      pointer-events: none; z-index: 0;
+    }
+
+    /* === GLOWING KEYFRAMES === */
+    @keyframes glow-pulse {
+      0%, 100% { box-shadow: 0 0 15px rgba(0,255,255,0.15), inset 0 0 15px rgba(0,255,255,0.03); }
+      50% { box-shadow: 0 0 25px rgba(0,255,255,0.25), inset 0 0 25px rgba(0,255,255,0.06); }
+    }
+
+    @keyframes neon-flicker {
+      0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { text-shadow: 0 0 10px rgba(0,255,255,0.6), 0 0 20px rgba(0,255,255,0.3), 0 0 40px rgba(0,255,255,0.15); }
+      20%, 24%, 55% { text-shadow: none; }
+    }
+
+    @keyframes border-glow {
+      0%, 100% { border-color: rgba(0,255,255,0.25); }
+      50% { border-color: rgba(0,255,255,0.5); }
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.9) translateY(20px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    @keyframes pulse-strip {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100vh); }
+    }
+
+    /* === LOGIN === */
+    .login-screen {
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #0a0e1a 0%, #1a1040 50%, #0d0520 100%);
+      padding: 20px;
+      position: relative;
+    }
+
+    .login-screen::before {
+      content: '';
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background:
+        radial-gradient(circle at 30% 40%, rgba(0,255,255,0.06) 0%, transparent 50%),
+        radial-gradient(circle at 70% 60%, rgba(255,0,255,0.06) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .login-card {
+      background: rgba(10, 14, 26, 0.9);
+      border: 2px solid rgba(0, 255, 255, 0.3);
+      border-radius: 20px;
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 0 40px rgba(0,255,255,0.1), 0 20px 60px rgba(0,0,0,0.5);
+      text-align: center;
+      animation: popIn 0.5s ease;
+      backdrop-filter: blur(20px);
+      position: relative;
+      z-index: 1;
+    }
+
+    .login-logo {
+      width: 64px; height: 64px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 1.6rem; color: #0a0e1a;
+      box-shadow: 0 0 30px rgba(0,255,255,0.4), 0 8px 24px rgba(0,0,0,0.3);
+    }
+
+    .login-card h1 {
+      font-size: 1.5rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 4px;
+    }
+    .login-card p { font-size: 0.85rem; color: var(--text3); margin-bottom: 32px; }
+
+    .login-input {
+      width: 100%;
+      padding: 14px 18px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      font-size: 0.95rem;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      color: var(--text);
+      outline: none;
+      transition: var(--transition);
+      margin-bottom: 14px;
+      background: rgba(0, 255, 255, 0.04);
+    }
+
+    .login-input::placeholder { color: var(--text3); }
+    .login-input:focus { border-color: var(--primary); box-shadow: 0 0 20px rgba(0,255,255,0.15); }
+
+    .login-submit {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #0a0e1a;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 800;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: var(--transition);
+      margin-top: 4px;
+      letter-spacing: 1px;
+    }
+
+    .login-submit:hover { box-shadow: 0 0 30px rgba(0,255,255,0.4), 0 4px 16px rgba(255,0,255,0.3); transform: translateY(-2px); }
+    .login-submit:active { transform: scale(0.98); }
+
+    .login-error {
+      display: none;
+      margin-top: 16px;
+      padding: 10px 16px;
+      background: rgba(255,51,85,0.1);
+      border: 1px solid rgba(255,51,85,0.3);
+      border-radius: 10px;
+      color: var(--danger);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    /* === DASHBOARD LAYOUT === */
+    .dashboard {
+      display: none;
+      min-height: 100vh;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* === SIDEBAR === */
+    .sidebar {
+      width: 240px;
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      z-index: 100;
+      overflow-y: auto;
+      backdrop-filter: blur(10px);
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 24px;
+      margin-bottom: 36px;
+    }
+
+    .sidebar-logo {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; color: #0a0e1a;
+      box-shadow: 0 0 15px rgba(0,255,255,0.3);
+    }
+
+    .sidebar-brand h2 {
+      font-size: 1.1rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: 0.3px;
+    }
+    .sidebar-brand span { font-size: 0.65rem; color: var(--text3); letter-spacing: 1px; display: block; }
+
+    .nav-section {
+      padding: 0 16px;
+      margin-bottom: 8px;
+    }
+
+    .nav-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: var(--text3);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 0 8px;
+      margin-bottom: 8px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 14px;
+      border-radius: 10px;
+      color: var(--text3);
+      font-size: 0.88rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition);
+      border: 1px solid transparent;
+      background: none;
+      width: 100%;
+      text-align: left;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .nav-item i { width: 20px; text-align: center; font-size: 0.9rem; }
+    .nav-item:hover { background: var(--sidebar-hover); color: var(--primary); border-color: rgba(0,255,255,0.1); }
+    .nav-item.active {
+      background: rgba(0, 255, 255, 0.1);
+      color: var(--primary);
+      font-weight: 600;
+      border-color: rgba(0, 255, 255, 0.3);
+      box-shadow: 0 0 15px rgba(0,255,255,0.1);
+    }
+    .nav-item.danger-nav { color: var(--danger); }
+    .nav-item.danger-nav:hover { background: rgba(255,51,85,0.1); color: #ff6b81; border-color: rgba(255,51,85,0.2); }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.green { background: var(--success); box-shadow: 0 0 12px rgba(0,255,136,0.6); }
+    .dot.red { background: var(--danger); box-shadow: 0 0 12px rgba(255,51,85,0.6); animation: pulse-strip 1.5s ease-in-out infinite; }
+    .status-label { font-size: 0.75rem; color: var(--text3); }
+
+    .logout-btn {
+      display: flex; align-items: center; gap: 8px;
+      padding: 9px 14px;
+      border-radius: 10px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      color: var(--text3);
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition);
+      width: 100%;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .logout-btn:hover { background: rgba(0,255,255,0.08); color: var(--primary); border-color: rgba(0,255,255,0.3); }
+
+    /* === MAIN AREA === */
+    .main {
+      margin-left: 240px;
+      padding: 28px 32px;
+      flex: 1;
+      min-height: 100vh;
+      position: relative;
+      z-index: 1;
+    }
+
+    .main-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 28px;
+    }
+
+    .main-header h1 {
+      font-size: 1.6rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: 1px;
+    }
+    .main-header .sub { font-size: 0.82rem; color: var(--text3); margin-top: 2px; }
+
+    .header-right { text-align: right; }
+
+    #clock {
+      font-family: 'Space Mono', monospace;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--primary);
+      text-shadow: 0 0 10px rgba(0,255,255,0.3);
+    }
+
+    #date-line {
+      font-size: 0.75rem;
+      color: var(--text3);
+      margin-top: 2px;
+    }
+
+    /* === TABS === */
+    .tab-content { display: none; }
+    .tab-content.default { display: block; }
+
+    /* === DEVICE CARDS === */
+    .summary-strip {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .summary-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text2);
+    }
+
+    .summary-chip .val { color: var(--primary); font-weight: 800; font-size: 1rem; text-shadow: 0 0 8px rgba(0,255,255,0.3); }
+
+    .kill-strip {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: rgba(255,51,85,0.08);
+      border: 1px solid rgba(255,51,85,0.3);
+      border-radius: 10px;
+      color: var(--danger);
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin-bottom: 24px;
+      animation: pulse-strip 1.5s ease-in-out infinite;
+      box-shadow: 0 0 20px rgba(255,51,85,0.1);
+    }
+
+    .devices {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .dev-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 24px;
+      transition: var(--transition);
+      position: relative;
+      overflow: hidden;
+      backdrop-filter: blur(10px);
+      animation: glow-pulse 4s ease-in-out infinite;
+    }
+
+    .dev-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: var(--border);
+      transition: var(--transition);
+    }
+
+    .dev-card.on::before { background: linear-gradient(90deg, var(--primary), var(--accent)); box-shadow: 0 0 15px rgba(0,255,255,0.4); }
+
+    .dev-card:hover {
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-4px);
+      border-color: var(--accent);
+    }
+
+    .dev-card.on {
+      border-color: var(--accent);
+      box-shadow: 0 0 30px rgba(255,0,255,0.15), 0 0 60px rgba(0,255,255,0.08);
+    }
+
+    .dev-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .dev-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem;
+      transition: var(--transition);
+      border: 1px solid;
+    }
+
+    .dev-card:nth-child(1) .dev-icon { background: rgba(0,255,255,0.08); color: var(--primary); border-color: rgba(0,255,255,0.2); }
+    .dev-card:nth-child(2) .dev-icon { background: rgba(255,0,255,0.08); color: var(--accent); border-color: rgba(255,0,255,0.2); }
+    .dev-card:nth-child(3) .dev-icon { background: rgba(0,255,136,0.08); color: var(--success); border-color: rgba(0,255,136,0.2); }
+    .dev-card:nth-child(4) .dev-icon { background: rgba(255,170,0,0.08); color: var(--warn); border-color: rgba(255,170,0,0.2); }
+
+    .dev-card.on:nth-child(1) .dev-icon { background: rgba(0,255,255,0.2); color: var(--primary); box-shadow: 0 0 20px rgba(0,255,255,0.3); border-color: var(--primary); }
+    .dev-card.on:nth-child(2) .dev-icon { background: rgba(255,0,255,0.2); color: var(--accent); box-shadow: 0 0 20px rgba(255,0,255,0.3); border-color: var(--accent); }
+    .dev-card.on:nth-child(3) .dev-icon { background: rgba(0,255,136,0.2); color: var(--success); box-shadow: 0 0 20px rgba(0,255,136,0.3); border-color: var(--success); }
+    .dev-card.on:nth-child(4) .dev-icon { background: rgba(255,170,0,0.2); color: var(--warn); box-shadow: 0 0 20px rgba(255,170,0,0.3); border-color: var(--warn); }
+
+    /* Toggle Switch */
+    .switch {
+      position: relative;
+      width: 52px; height: 28px;
+      display: inline-block;
+    }
+
+    .switch input { display: none; }
+
+    .slider {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,255,255,0.1);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .slider::before {
+      content: '';
+      position: absolute;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--text3);
+      left: 3px; top: 2px;
+      transition: var(--transition);
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    }
+
+    .switch input:checked + .slider {
+      background: rgba(0,255,255,0.15);
+      border-color: var(--primary);
+      box-shadow: 0 0 15px rgba(0,255,255,0.2);
+    }
+    .switch input:checked + .slider::before {
+      transform: translateX(24px);
+      background: var(--primary);
+      box-shadow: 0 0 12px rgba(0,255,255,0.5);
+    }
+
+    .dev-name {
+      font-size: 1rem; font-weight: 700; color: var(--text); margin-bottom: 2px;
+      letter-spacing: 0.5px;
+    }
+    .dev-sub { font-size: 0.75rem; color: var(--accent); font-family: 'Space Mono', monospace; margin-bottom: 4px; opacity: 0.7; letter-spacing: 1px; }
+
+    .dev-status {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+
+    .dev-card:not(.on) .dev-status { background: rgba(100,116,139,0.15); color: var(--text3); }
+    .dev-card.on .dev-status { background: rgba(0,255,136,0.12); color: var(--success); box-shadow: 0 0 10px rgba(0,255,136,0.1); }
+
+    .dev-btns {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dev-btn {
+      flex: 1;
+      padding: 9px 0;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: var(--transition);
+      border: 1px solid var(--border);
+      background: rgba(0,255,255,0.04);
+      color: var(--text2);
+      letter-spacing: 0.5px;
+    }
+
+    .dev-btn:hover { border-color: var(--primary); color: var(--primary); box-shadow: 0 0 12px rgba(0,255,255,0.15); }
+    .dev-btn:active { transform: scale(0.96); }
+
+    /* === QUICK ACTIONS === */
+    .quick-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .q-btn {
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: var(--transition);
+      border: 1px solid var(--border);
+      background: rgba(0,255,255,0.04);
+      color: var(--text2);
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .q-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+    .q-btn:active { transform: scale(0.97); }
+    .q-btn.aon:hover { border-color: var(--success); color: var(--success); box-shadow: 0 0 15px rgba(0,255,136,0.2); }
+    .q-btn.aoff:hover { border-color: var(--danger); color: var(--danger); box-shadow: 0 0 15px rgba(255,51,85,0.2); }
+    .q-btn.rst:hover { border-color: var(--primary); color: var(--primary); box-shadow: var(--glow-cyan); }
+
+    /* === TIMER TAB === */
+    .timer-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 28px;
+      max-width: 520px;
+      backdrop-filter: blur(10px);
+    }
+
+    .timer-card h3 {
+      font-size: 1rem; font-weight: 700; margin-bottom: 20px;
+      display: flex; align-items: center; gap: 8px;
+      color: var(--primary);
+    }
+
+    .timer-card h3 i { color: var(--accent); }
+
+    .t-devices {
+      display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;
+    }
+
+    .t-dev-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: rgba(0,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .t-dev-item:hover { border-color: var(--primary); background: rgba(0,255,255,0.06); }
+
+    .t-dev-item input[type="checkbox"] {
+      appearance: none;
+      width: 20px; height: 20px;
+      border: 2px solid var(--text3);
+      border-radius: 6px;
+      cursor: pointer;
+      position: relative;
+      transition: var(--transition);
+      flex-shrink: 0;
+      background: transparent;
+    }
+
+    .t-dev-item input[type="checkbox"]:checked {
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 0 10px rgba(0,255,255,0.3);
+    }
+
+    .t-dev-item input[type="checkbox"]:checked::after {
+      content: '\2713';
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #0a0e1a; font-size: 0.7rem; font-weight: 800;
+    }
+
+    .t-dev-label { font-size: 0.85rem; font-weight: 500; color: var(--text2); }
+    .t-dev-label i { margin-right: 6px; width: 16px; text-align: center; color: var(--primary); }
+
+    .t-time-row {
+      display: flex; gap: 10px; margin-bottom: 16px;
+    }
+
+    .t-time-group { flex: 1; text-align: center; }
+    .t-time-group label { display: block; font-size: 0.68rem; color: var(--primary); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; font-weight: 600; }
+
+    .t-time-group input[type="number"] {
+      width: 100%; padding: 10px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 1.1rem; font-weight: 700;
+      font-family: 'Space Mono', monospace;
+      text-align: center; outline: none;
+      transition: var(--transition);
+    }
+
+    .t-time-group input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0,255,255,0.15); }
+    .t-time-group input::-webkit-inner-spin-button { opacity: 0; }
+
+    .t-action-row { margin-bottom: 16px; }
+
+    .t-action-row select {
+      width: 100%; padding: 10px 14px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 0.85rem; font-weight: 500;
+      font-family: 'Outfit', sans-serif;
+      outline: none; cursor: pointer;
+      transition: var(--transition);
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ffff' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+    }
+
+    .t-action-row select:focus { border-color: var(--primary); }
+    .t-action-row select option { background: #0a0e1a; color: var(--text); }
+
+    .t-start-btn {
+      width: 100%; padding: 13px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border: none; border-radius: 12px;
+      color: #0a0e1a; font-size: 0.9rem;
+      font-weight: 800; font-family: 'Outfit', sans-serif;
+      cursor: pointer; transition: var(--transition);
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      letter-spacing: 1px;
+    }
+
+    .t-start-btn:hover { box-shadow: 0 0 30px rgba(0,255,255,0.3), 0 0 15px rgba(255,0,255,0.2); transform: translateY(-2px); }
+    .t-start-btn:active { transform: scale(0.97); }
+
+    .timer-running { display: none; text-align: center; }
+
+    .timer-running .countdown {
+      font-family: 'Space Mono', monospace;
+      font-size: 2.8rem; font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 16px;
+      text-shadow: 0 0 20px rgba(0,255,255,0.4), 0 0 40px rgba(0,255,255,0.15);
+    }
+
+    .t-progress { width: 100%; height: 6px; background: rgba(0,255,255,0.08); border-radius: 3px; overflow: hidden; margin-bottom: 16px; }
+    .t-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 3px; width: 0%; transition: width 1s linear; box-shadow: 0 0 10px rgba(0,255,255,0.3); }
+
+    .t-info { font-size: 0.82rem; color: var(--text2); margin-bottom: 6px; }
+    .act-badge { display: inline-block; padding: 3px 12px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; margin-bottom: 16px; }
+    .badge-on { background: rgba(0,255,136,0.12); color: var(--success); }
+    .badge-off { background: rgba(255,51,85,0.12); color: var(--danger); }
+
+    .t-cancel-btn {
+      padding: 10px 28px;
+      background: transparent;
+      border: 1px solid var(--danger);
+      border-radius: 10px;
+      color: var(--danger);
+      font-size: 0.82rem; font-weight: 700;
+      cursor: pointer; transition: var(--transition);
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .t-cancel-btn:hover { background: rgba(255,51,85,0.1); box-shadow: 0 0 15px rgba(255,51,85,0.2); }
+
+    /* === EMERGENCY TAB === */
+    .emergency-card {
+      background: rgba(255,51,85,0.04);
+      border: 1px solid rgba(255,51,85,0.25);
+      border-radius: var(--radius);
+      padding: 40px;
+      text-align: center;
+      max-width: 480px;
+      backdrop-filter: blur(10px);
+    }
+
+    .emergency-icon {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: rgba(255,51,85,0.1);
+      border: 2px solid rgba(255,51,85,0.3);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 1.8rem; color: var(--danger);
+      box-shadow: 0 0 25px rgba(255,51,85,0.15);
+    }
+
+    .emergency-card h3 { font-size: 1.2rem; font-weight: 800; color: var(--danger); margin-bottom: 8px; }
+    .emergency-card p { font-size: 0.85rem; color: var(--text3); margin-bottom: 28px; line-height: 1.5; }
+
+    .e-btn {
+      width: 100%; padding: 16px;
+      background: linear-gradient(135deg, #ff3355, #ff0044);
+      border: none; border-radius: 12px;
+      color: white; font-size: 1rem;
+      font-weight: 800; font-family: 'Outfit', sans-serif;
+      cursor: pointer; transition: var(--transition);
+      letter-spacing: 2px;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+
+    .e-btn:hover { box-shadow: 0 0 30px rgba(255,51,85,0.4), 0 4px 20px rgba(255,0,68,0.3); transform: translateY(-2px); }
+    .e-btn:active { transform: scale(0.97); }
+
+    /* === TOAST === */
+    #toasts {
+      position: fixed; top: 20px; right: 20px;
+      z-index: 9999;
+      display: flex; flex-direction: column; gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast-msg {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 0.85rem; font-weight: 600;
+      background: rgba(10,14,26,0.95);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      transform: translateX(80px);
+      transition: all 0.35s ease;
+      pointer-events: auto;
+      backdrop-filter: blur(20px);
+      color: var(--text);
+    }
+
+    .toast-msg.visible { opacity: 1; transform: translateX(0); }
+    .toast-msg.leaving { opacity: 0; transform: translateX(80px) scale(0.9); }
+
+    .t-on { border-left: 4px solid var(--success); }
+    .t-on i { color: var(--success); text-shadow: 0 0 8px rgba(0,255,136,0.4); }
+    .t-off { border-left: 4px solid var(--text3); }
+    .t-off i { color: var(--text3); }
+    .t-danger { border-left: 4px solid var(--danger); }
+    .t-danger i { color: var(--danger); text-shadow: 0 0 8px rgba(255,51,85,0.4); }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 860px) {
+      .sidebar {
+        position: fixed;
+        width: 100%;
+        height: auto;
+        bottom: 0; top: auto; left: 0;
+        flex-direction: row;
+        padding: 0;
+        border-top: 1px solid var(--border);
+        border-right: none;
+        z-index: 200;
+        background: var(--sidebar);
+      }
+
+      .sidebar-brand, .sidebar-footer, .nav-label { display: none; }
+
+      .nav-section {
+        display: flex; gap: 0; padding: 0;
+        width: 100%;
+        margin: 0;
+      }
+
+      .nav-item {
+        flex: 1;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 3px;
+        padding: 10px 0;
+        border-radius: 0;
+        font-size: 0.65rem;
+        border: none;
+      }
+
+      .nav-item i { font-size: 1rem; width: auto; }
+      .nav-item.active { border: none; box-shadow: inset 0 2px 0 var(--primary); }
+
+      .main {
+        margin-left: 0;
+        padding: 20px 16px 80px;
+      }
+
+      .devices { grid-template-columns: 1fr; }
+      .summary-strip { flex-wrap: wrap; }
+      .quick-row { flex-wrap: wrap; }
+      .q-btn { flex: 1; min-width: calc(50% - 8px); justify-content: center; }
+    }
+
+    @media (max-width: 480px) {
+      .main-header h1 { font-size: 1.3rem; }
+      .timer-running .countdown { font-size: 2rem; }
+      .login-card { padding: 36px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <div class="login-screen" id="login-screen">
+    <div class="login-card">
+      <div class="login-logo"><i class="fa-solid fa-house-chimney"></i></div>
+      <h1>SmartHome</h1>
+      <p>Enter your credentials to continue</p>
+      <input class="login-input" id="inp-id" type="text" placeholder="User ID" autocomplete="off">
+      <input class="login-input" id="inp-pw" type="password" placeholder="Password">
+      <button class="login-submit" onclick="doLogin()">Sign In</button>
+      <div class="login-error" id="login-err"></div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="dashboard" id="dashboard">
+
+    <!-- SIDEBAR -->
+    <nav class="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo"><i class="fa-solid fa-house-chimney"></i></div>
+        <div>
+          <h2>SmartHome</h2>
+          <span>Control Panel</span>
+        </div>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-label">Menu</div>
+        <button class="nav-item active" data-tab="devices" onclick="switchTab('devices')">
+          <i class="fa-solid fa-lightbulb"></i> Devices
+        </button>
+        <button class="nav-item" data-tab="timer" onclick="switchTab('timer')">
+          <i class="fa-solid fa-clock"></i> Timer
+        </button>
+        <button class="nav-item danger-nav" data-tab="emergency" onclick="switchTab('emergency')">
+          <i class="fa-solid fa-shield-halved"></i> Emergency
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-row">
+          <div class="dot red" id="fb-dot"></div>
+          <span class="status-label" id="fb-label">Connecting...</span>
+        </div>
+        <button class="logout-btn" onclick="doLogout()">
+          <i class="fa-solid fa-right-from-bracket"></i> Logout
+        </button>
+      </div>
+    </nav>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="main-header">
+        <div>
+          <h1>Dashboard</h1>
+          <div class="sub">Manage your smart home devices</div>
+        </div>
+        <div class="header-right">
+          <div id="clock">--:--</div>
+          <div id="date-line">---</div>
+        </div>
+      </div>
+
+      <!-- DEVICES TAB -->
+      <div class="tab-content default" id="tab-devices">
+        <div class="summary-strip">
+          <div class="summary-chip">
+            <i class="fa-solid fa-bolt" style="color: var(--primary)"></i>
+            Active: <span class="val" id="dev-count">0/4</span>
+          </div>
+        </div>
+
+        <div class="kill-strip" id="kill-indicator">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          EMERGENCY STOP ACTIVE — All systems halted
+        </div>
+
+        <div class="devices">
+          <!-- Living Room -->
+          <div class="dev-card" id="dev-led1">
+            <div class="dev-top">
+              <div class="dev-icon"><i class="fa-solid fa-couch"></i></div>
+              <label class="switch">
+                <input type="checkbox" id="sw-led1" onchange="toggleDevice('led1')">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="dev-name">Living Room</div>
+            <div class="dev-sub">GPIO 2</div>
+            <div class="dev-status">STANDBY</div>
+            <div class="dev-btns">
+              <button class="dev-btn" onclick="toggleDevice('led1')"><i class="fa-solid fa-power-off"></i> Toggle</button>
+            </div>
+          </div>
+
+          <!-- Bedroom -->
+          <div class="dev-card" id="dev-led2">
+            <div class="dev-top">
+              <div class="dev-icon"><i class="fa-solid fa-bed"></i></div>
+              <label class="switch">
+                <input type="checkbox" id="sw-led2" onchange="toggleDevice('led2')">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="dev-name">Bedroom</div>
+            <div class="dev-sub">GPIO 4</div>
+            <div class="dev-status">STANDBY</div>
+            <div class="dev-btns">
+              <button class="dev-btn" onclick="toggleDevice('led2')"><i class="fa-solid fa-power-off"></i> Toggle</button>
+            </div>
+          </div>
+
+          <!-- Kitchen -->
+          <div class="dev-card" id="dev-led3">
+            <div class="dev-top">
+              <div class="dev-icon"><i class="fa-solid fa-kitchen-set"></i></div>
+              <label class="switch">
+                <input type="checkbox" id="sw-led3" onchange="toggleDevice('led3')">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="dev-name">Kitchen</div>
+            <div class="dev-sub">GPIO 5</div>
+            <div class="dev-status">STANDBY</div>
+            <div class="dev-btns">
+              <button class="dev-btn" onclick="toggleDevice('led3')"><i class="fa-solid fa-power-off"></i> Toggle</button>
+            </div>
+          </div>
+
+          <!-- TV -->
+          <div class="dev-card" id="dev-tv">
+            <div class="dev-top">
+              <div class="dev-icon"><i class="fa-solid fa-tv"></i></div>
+              <label class="switch">
+                <input type="checkbox" id="sw-tv" onchange="toggleDevice('tv')">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="dev-name">TV</div>
+            <div class="dev-sub">I2C LCD</div>
+            <div class="dev-status">STANDBY</div>
+            <div class="dev-btns">
+              <button class="dev-btn" onclick="toggleDevice('tv')"><i class="fa-solid fa-power-off"></i> Toggle</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="quick-row">
+          <button class="q-btn aon" onclick="allOn()"><i class="fa-solid fa-toggle-on"></i> All On</button>
+          <button class="q-btn aoff" onclick="allOff()"><i class="fa-solid fa-toggle-off"></i> All Off</button>
+          <button class="q-btn rst" onclick="resetAll()"><i class="fa-solid fa-rotate-right"></i> Reset</button>
+        </div>
+      </div>
+
+      <!-- TIMER TAB -->
+      <div class="tab-content" id="tab-timer">
+        <div class="timer-card">
+          <h3><i class="fa-solid fa-stopwatch"></i> Schedule Timer</h3>
+
+          <div id="timer-setup">
+            <div class="t-devices">
+              <label class="t-dev-item"><input type="checkbox" class="t-check" value="led1"><span class="t-dev-label"><i class="fa-solid fa-couch"></i> Living Room</span></label>
+              <label class="t-dev-item"><input type="checkbox" class="t-check" value="led2"><span class="t-dev-label"><i class="fa-solid fa-bed"></i> Bedroom</span></label>
+              <label class="t-dev-item"><input type="checkbox" class="t-check" value="led3"><span class="t-dev-label"><i class="fa-solid fa-kitchen-set"></i> Kitchen</span></label>
+              <label class="t-dev-item"><input type="checkbox" class="t-check" value="tv"><span class="t-dev-label"><i class="fa-solid fa-tv"></i> TV</span></label>
+            </div>
+
+            <div class="t-time-row">
+              <div class="t-time-group"><label>Hours</label><input type="number" id="th" min="0" max="23" value="0"></div>
+              <div class="t-time-group"><label>Minutes</label><input type="number" id="tm" min="0" max="59" value="0"></div>
+              <div class="t-time-group"><label>Seconds</label><input type="number" id="ts" min="0" max="59" value="30"></div>
+            </div>
+
+            <div class="t-action-row">
+              <select id="t-action">
+                <option value="off">Turn OFF after timer</option>
+                <option value="on">Turn ON after timer</option>
+              </select>
+            </div>
+
+            <button class="t-start-btn" onclick="startTimer()"><i class="fa-solid fa-play"></i> Start Timer</button>
+          </div>
+
+          <div class="timer-running" id="timer-running">
+            <div class="countdown" id="t-countdown">--:--</div>
+            <div class="t-progress"><div class="t-fill" id="t-bar"></div></div>
+            <div class="t-info">Devices: <strong id="t-devs">-</strong></div>
+            <div class="act-badge badge-off" id="t-act-badge">Turn OFF</div><br>
+            <button class="t-cancel-btn" onclick="cancelTimer()"><i class="fa-solid fa-stop"></i> Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- EMERGENCY TAB -->
+      <div class="tab-content" id="tab-emergency">
+        <div class="emergency-card">
+          <div class="emergency-icon"><i class="fa-solid fa-power-off"></i></div>
+          <h3>Emergency Stop</h3>
+          <p>Immediately shut down all connected devices. Use this in case of an emergency or malfunction.</p>
+          <button class="e-btn" onclick="emergencyStop()"><i class="fa-solid fa-power-off"></i> EMERGENCY STOP</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toasts"></div>
+</body>
+</html>

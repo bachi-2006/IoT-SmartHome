@@ -1,0 +1,28 @@
+{
+  "name": "smarthome-cloud-control",
+  "version": "1.0.0",
+  "description": "SmartHome Cloud Control Platform — Firebase + ESP32 IoT System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "smart-home",
+    "firebase",
+    "iot",
+    "esp32",
+    "realtime"
+  ],
+  "author": "Team14",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/cli": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "firebase-admin": "^13.6.1"
+  }
+}

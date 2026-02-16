@@ -1,0 +1,14 @@
+{
+  "rules": {
+    "smartHomeState": {
+      ".read": true,
+      ".write": true,
+
+      "led1":  { ".validate": "newData.isBoolean()" },
+      "led2":  { ".validate": "newData.isBoolean()" },
+      "led3":  { ".validate": "newData.isBoolean()" },
+      "mode":  { ".validate": "newData.isString() && newData.val().matches(/^(normal|wave|pulse|disco)$/)" },
+      "kill":  { ".validate": "newData.isBoolean()" }
+    }
+  }
+}
