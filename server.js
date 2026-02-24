@@ -159,7 +159,8 @@ db.ref("smartHomeState/timer").on("value", async (snap) => {
 
 const app = express();
 app.use(express.json());
-app.use(express.static("public"));
+// Serve static files from root directory since 'public' folder was merged
+app.use(express.static("."));
 
 // ======================== REST API ========================
 
