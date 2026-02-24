@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In - SmartHome</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'bg': '#000000',
+                        'bg-2': '#111111',
+                        'surface': '#1a1a1a',
+                        'border': '#333333',
+                        'text-primary': '#ffffff',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        :root {
+            --color-bg: #000000;
+            --color-bg-2: #111111;
+            --color-surface: #1a1a1a;
+            --color-border: #333333;
+            --color-text-primary: #ffffff;
+        }
+        body {
+            background-color: var(--color-bg);
+            color: var(--color-text-primary);
+        }
+    </style>
+</head>
+<body class="h-screen w-full flex items-center justify-center p-4 bg-[var(--color-bg)]">
+
+    <!-- Card Container -->
+    <div class="card w-[95%] sm:w-[80%] lg:w-[70%] md:w-[60%] flex justify-between h-[600px] bg-[var(--color-bg-2)] rounded-xl overflow-hidden shadow-2xl border border-[var(--color-border)]">
+        
+        <!-- Left Section (Login Form) -->
+        <div id="login-section" class="w-full lg:w-1/2 px-4 lg:px-16 flex flex-col justify-center h-full relative overflow-hidden group">
+            
+            <!-- Mouse Follow Effect Background -->
+            <div id="glow-effect" 
+                 class="absolute pointer-events-none w-[500px] h-[500px] bg-gradient-to-r from-purple-500/20 via-blue-500/20 to-pink-500/20 rounded-full blur-3xl opacity-0 transition-opacity duration-300"
+                 style="transform: translate(-50%, -50%); top: 0; left: 0;">
+            </div>
+
+            <div class="z-10 w-full max-w-sm mx-auto">
+                <div class="text-center mb-10">
+                    <h1 class="text-3xl md:text-4xl font-extrabold mb-6">Sign in</h1>
+                    
+                    <!-- Social Icons -->
+                    <div class="flex items-center justify-center gap-4 mb-4">
+                        <!-- Google -->
+                        <a href="#" class="social-btn w-12 h-12 rounded-full flex justify-center items-center relative border border-[var(--color-border)] hover:border-white transition-colors duration-300 group/icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="text-gray-400 group-hover/icon:text-white transition-colors"><path fill="currentColor" d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 16.25 5 12c0-4.1 3.2-7.27 7.2-7.27c3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12.5S6.42 23 12.1 23c5.83 0 10.13-4.3 10.13-10.45c0-.7-.1-1.45-.1-1.45z"/></svg>
+                        </a>
+                        <!-- Github -->
+                        <a href="#" class="social-btn w-12 h-12 rounded-full flex justify-center items-center relative border border-[var(--color-border)] hover:border-white transition-colors duration-300 group/icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="text-gray-400 group-hover/icon:text-white transition-colors"><path fill="currentColor" d="M12 2A10 10 0 0 0 2 12c0 4.42 2.87 8.17 6.84 9.5c.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34c-.46-1.16-1.1-1.47-1.1-1.47c-.9-.62.07-.6.07-.6c1 .07 1.53 1.03 1.53 1.03c.87 1.52 2.34 1.07 2.91.83c.09-.65.35-1.09.63-1.34c-2.22-.25-4.55-1.11-4.55-4.92c0-1.11.38-2 1.03-2.71c-.1-.25-.45-1.29.1-2.64c0 0 .84-.27 2.75 1.02c.79-.22 1.65-.33 2.5-.33c.85 0 1.71.11 2.5.33c1.91-1.29 2.75-1.02 2.75-1.02c.55 1.35.2 2.39.1 2.64c.65.71 1.03 1.6 1.03 2.71c0 3.82-2.34 4.66-4.57 4.91c.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0 0 12 2z"/></svg>
+                        </a>
+                    </div>
+                    
+                    <span class="text-xs text-gray-500">or use your account</span>
+                </div>
+
+                <!-- Form Inputs -->
+                <form id="loginForm" class="grid gap-4">
+                    <!-- Email Input -->
+                    <div class="input-group relative w-full group/input">
+                        <input type="email" placeholder="Email" class="peer relative z-10 border border-[var(--color-border)] h-12 w-full rounded-md bg-[var(--color-surface)] px-4 font-thin outline-none transition-all duration-200 focus:border-white focus:bg-[var(--color-bg)] placeholder:font-medium text-sm text-white" />
+                        <!-- Input Glow Effect -->
+                        <div class="input-glow absolute pointer-events-none top-0 left-0 right-0 h-[1px] z-20 overflow-hidden opacity-0 group-hover/input:opacity-100 transition-opacity">
+                            <div class="glow-point absolute w-[60px] h-[60px] bg-white blur-xl -translate-y-1/2"></div>
+                        </div>
+                         <div class="input-glow-bottom absolute pointer-events-none bottom-0 left-0 right-0 h-[1px] z-20 overflow-hidden opacity-0 group-hover/input:opacity-100 transition-opacity">
+                            <div class="glow-point absolute w-[60px] h-[60px] bg-white blur-xl translate-y-1/2"></div>
+                        </div>
+                    </div>
+
+                    <!-- Password Input -->
+                    <div class="input-group relative w-full group/input">
+                        <input type="password" placeholder="Password" class="peer relative z-10 border border-[var(--color-border)] h-12 w-full rounded-md bg-[var(--color-surface)] px-4 font-thin outline-none transition-all duration-200 focus:border-white focus:bg-[var(--color-bg)] placeholder:font-medium text-sm text-white" />
+                         <!-- Input Glow Effect -->
+                         <div class="input-glow absolute pointer-events-none top-0 left-0 right-0 h-[1px] z-20 overflow-hidden opacity-0 group-hover/input:opacity-100 transition-opacity">
+                            <div class="glow-point absolute w-[60px] h-[60px] bg-white blur-xl -translate-y-1/2"></div>
+                        </div>
+                         <div class="input-glow-bottom absolute pointer-events-none bottom-0 left-0 right-0 h-[1px] z-20 overflow-hidden opacity-0 group-hover/input:opacity-100 transition-opacity">
+                             <div class="glow-point absolute w-[60px] h-[60px] bg-white blur-xl translate-y-1/2"></div>
+                        </div>
+                    </div>
+
+                    <a href="#" class="font-light text-xs md:text-sm text-gray-400 hover:text-white transition-colors text-right">Forgot your password?</a>
+
+                    <div class="flex justify-center mt-4">
+                        <button type="submit" class="group relative inline-flex justify-center items-center overflow-hidden rounded-md bg-white text-black px-8 py-2 text-sm font-medium transition-all duration-300 hover:scale-105 hover:shadow-lg">
+                            <span class="relative z-10">Sign In</span>
+                            <div class="absolute inset-0 flex h-full w-full justify-center [transform:skew(-13deg)_translateX(-100%)] group-hover:duration-1000 group-hover:[transform:skew(-13deg)_translateX(100%)]">
+                                <div class="relative h-full w-8 bg-black/10"></div>
+                            </div>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Right Section (Image) -->
+        <div class="hidden lg:block w-1/2 h-full relative overflow-hidden bg-black">
+             <img src="https://images.pexels.com/photos/7102037/pexels-photo-7102037.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2" 
+                  alt="Login Visual" 
+                  class="w-full h-full object-cover opacity-50 transition-transform duration-700 hover:scale-110">
+             <div class="absolute inset-0 bg-gradient-to-l from-transparent to-[var(--color-bg-2)]"></div>
+        </div>
+    </div>
+
+    <!-- Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, browserLocalPersistence, setPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyA2wU4qY_5zXRenCOpSpyq4hj3ewAa7lCs",
+            authDomain: "team14-iot.firebaseapp.com",
+            databaseURL: "https://team14-iot-default-rtdb.firebaseio.com",
+            projectId: "team14-iot",
+            messagingSenderId: "531197922402",
+            appId: "1:531197922402:web:ea0ac2a1aaa185fcbf953b"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+
+        // --- UI Logic: Hover Effects ---
+        const loginSection = document.getElementById('login-section');
+        const glowEffect = document.getElementById('glow-effect');
+
+        loginSection.addEventListener('mousemove', (e) => {
+            const rect = loginSection.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Move the background glow center to the mouse position
+             // The glow is 500x500, so subtract 250 to center it
+            glowEffect.style.transform = `translate(${x - 250}px, ${y - 250}px)`;
+            glowEffect.style.opacity = '1';
+        });
+
+        loginSection.addEventListener('mouseleave', () => {
+             glowEffect.style.opacity = '0';
+        });
+
+        // --- Input Border Glow Effect ---
+        const inputGroups = document.querySelectorAll('.input-group');
+        inputGroups.forEach(group => {
+            const glows = group.querySelectorAll('.glow-point');
+            
+            group.addEventListener('mousemove', (e) => {
+                const rect = group.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                
+                glows.forEach(glow => {
+                    glow.style.left = `${x}px`;
+                });
+            });
+        });
+
+        // --- Logic: Authentication ---
+        const loginForm = document.getElementById('loginForm');
+        const submitBtn = loginForm.querySelector('button');
+        const btnText = submitBtn.querySelector('span');
+        const emailInput = loginForm.querySelector('input[type="email"]');
+        const passInput = loginForm.querySelector('input[type="password"]');
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = emailInput.value;
+            const password = passInput.value;
+
+            // Simple client-side validation
+            if (!email || !password) {
+                alert("Please fill in both fields");
+                return;
+            }
+
+            // UI Feedback: Loading state
+            const originalText = btnText.innerText;
+            btnText.innerText = 'Signing In...';
+            submitBtn.disabled = true;
+            submitBtn.classList.add('opacity-75', 'cursor-wait');
+
+            try {
+                // Ensure persistence is set (though local is default)
+                await setPersistence(auth, browserLocalPersistence);
+                
+                // Attempt sign-in
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                
+                console.log("Login successful:", user.email);
+                
+                // Success feedback
+                btnText.innerText = 'Success!';
+                submitBtn.classList.remove('bg-white', 'text-black');
+                submitBtn.classList.add('bg-green-500', 'text-white');
+
+                // Redirect after brief delay
+                setTimeout(() => {
+                    window.location.href = 'index.html';
+                }, 800);
+
+            } catch (error) {
+                console.error("Login failed:", error.code, error.message);
+                
+                // Error feedback
+                btnText.innerText = 'Failed';
+                submitBtn.classList.remove('bg-white', 'text-black');
+                submitBtn.classList.add('bg-red-500', 'text-white');
+                
+                setTimeout(() => {
+                    // Reset button
+                    btnText.innerText = originalText;
+                    submitBtn.classList.remove('bg-red-500', 'text-white', 'opacity-75', 'cursor-wait');
+                    submitBtn.classList.add('bg-white', 'text-black');
+                    submitBtn.disabled = false;
+                    alert("Login failed: " + error.message);
+                }, 2000);
+            }
+        });
+    </script>
+</body>
+</html>

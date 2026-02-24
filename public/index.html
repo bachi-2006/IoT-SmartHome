@@ -41,6 +41,7 @@
           led1: v.led1 || false, led2: v.led2 || false, led3: v.led3 || false,
           tv: v.tv || false, kill: v.kill || false
         };
+        handleTimerSync(v.timer || null);
         updateUI();
         firebaseConnected = true;
         updateStatusDot();
@@ -83,9 +84,9 @@
       return { led1: "Living Room", led2: "Bedroom", led3: "Kitchen", tv: "TV" }[d] || d;
     }
 
-    // ---- Timer (Firebase-based, works in APK) ----
-    let timerPoll = null;
-    let localTimerTimeout = null;
+    // ---- Timer (synced via main Firebase listener) ----
+    let countdownInterval = null;
+    let currentTimerData = null;
 
     window.startTimer = async function() {
       const devs = [...document.querySelectorAll('.t-check:checked')].map(c => c.value);
@@ -109,59 +110,57 @@
 
       await set(ref(db, "smartHomeState/timer"), timerData);
       toast(`Timer: ${fmtDur(dur)}`, 'on');
-      startLocalTimer(timerData);
     };
 
-    function startLocalTimer(timerData) {
-      stopLocalTimer();
-      pollTimerStart();
-
-      const remaining = Math.max(0, timerData.endsAt - Date.now());
-      localTimerTimeout = setTimeout(async () => {
-        const updates = {};
-        timerData.devices.forEach(d => { updates[d] = timerData.action === 'on'; });
-        if (timerData.action === 'on') updates.kill = false;
-        updates.timer = null;
-        await update(ref(db, "smartHomeState"), updates);
-        pollTimerStop();
-        renderTimer(null);
-        toast(`Timer done — devices ${timerData.action === 'on' ? 'ON' : 'OFF'}`, timerData.action === 'on' ? 'on' : 'off');
-      }, remaining);
-    }
-
-    function stopLocalTimer() {
-      if (localTimerTimeout) { clearTimeout(localTimerTimeout); localTimerTimeout = null; }
-    }
-
     window.cancelTimer = async function() {
-      stopLocalTimer();
+      stopCountdown();
       await set(ref(db, "smartHomeState/timer"), null);
-      pollTimerStop();
       renderTimer(null);
       toast("Timer cancelled", "off");
     };
 
-    function pollTimerStart() { pollTimerStop(); doPoll(); timerPoll = setInterval(doPoll, 1000); }
-    function pollTimerStop() { if (timerPoll) { clearInterval(timerPoll); timerPoll = null; } }
-
-    function doPoll() {
-      // Read timer from local state (Firebase listener keeps it updated)
-      const timerRef2 = ref(db, "smartHomeState/timer");
-      onValue(timerRef2, (snap) => {
-        const timer = snap.val();
-        if (timer && timer.active) {
-          const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
-          if (remaining <= 0) {
-            renderTimer(null);
-            pollTimerStop();
-          } else {
-            renderTimer({ ...timer, remaining });
-          }
+    function handleTimerSync(timer) {
+      currentTimerData = timer;
+      if (timer && timer.active) {
+        const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
+        if (remaining > 0) {
+          startCountdown(timer);
         } else {
-          renderTimer(null);
-          pollTimerStop();
+          executeTimerAction(timer);
         }
-      }, { onlyOnce: true });
+      } else {
+        stopCountdown();
+        renderTimer(null);
+      }
+    }
+
+    function startCountdown(timer) {
+      stopCountdown();
+      renderTimerTick(timer);
+      countdownInterval = setInterval(() => renderTimerTick(currentTimerData || timer), 1000);
+    }
+
+    function renderTimerTick(timer) {
+      if (!timer || !timer.active) { stopCountdown(); renderTimer(null); return; }
+      const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
+      if (remaining <= 0) {
+        stopCountdown();
+        executeTimerAction(timer);
+        return;
+      }
+      renderTimer({ ...timer, remaining });
+    }
+
+    function stopCountdown() {
+      if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+    }
+
+    async function executeTimerAction(timer) {
+      // Server handles the actual device state changes.
+      // Client only updates UI to avoid race conditions.
+      stopCountdown();
+      renderTimer(null);
+      toast(`Timer done — devices ${timer.action === 'on' ? 'ON' : 'OFF'}`, timer.action === 'on' ? 'on' : 'off');
     }
 
     function renderTimer(t) {
@@ -269,18 +268,68 @@
     }
     setInterval(tick, 1000); tick();
 
-    // Check timer on load
-    setTimeout(() => {
-      onValue(ref(db, "smartHomeState/timer"), (snap) => {
-        const timer = snap.val();
-        if (timer && timer.active) {
-          const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
-          if (remaining > 0) {
-            startLocalTimer(timer);
-          }
-        }
-      }, { onlyOnce: true });
-    }, 1200);
+    // ---- Gemini Gem Helper ----
+    window.copyGemPrompt = function() {
+      const baseUrl = document.getElementById('gem-base-url').value.trim() || window.location.origin;
+      const prompt = `You are a smart home controller. The user will ask you to control devices.
+
+Available devices: Living Room, Bedroom, Kitchen, TV
+
+When the user asks you to do something, respond with the action you're taking AND the clickable link.
+
+URL patterns (base: ${baseUrl}):
+- Turn device on: ${baseUrl}/do/{device}/on
+- Turn device off: ${baseUrl}/do/{device}/off
+- Toggle device: ${baseUrl}/do/{device}/toggle
+- All devices on: ${baseUrl}/do/all-on
+- All devices off: ${baseUrl}/do/all-off
+- All lights on (no TV): ${baseUrl}/do/lights-on
+- All lights off (no TV): ${baseUrl}/do/lights-off
+- Emergency stop: ${baseUrl}/do/emergency
+- Timer (single device): ${baseUrl}/do/timer/{device}/{seconds}/{on|off}
+- Timer (all devices): ${baseUrl}/do/timer-all/{seconds}/{on|off}
+- Cancel timer: ${baseUrl}/do/timer-cancel
+- Check status: ${baseUrl}/do/status
+
+Device names for URLs: living-room, bedroom, kitchen, tv
+
+Rules:
+1. Always provide the full clickable URL for the action
+2. For timers, convert minutes/hours to seconds (5 min = 300, 1 hour = 3600)
+3. "Turn on" timer means: after the timer expires, turn the device ON
+4. "Turn off" timer means: after the timer expires, turn the device OFF  
+5. Timer only affects the devices specified — other devices stay untouched
+6. If the user says "good night" or "sleep", turn off all lights
+7. If the user says "I'm home" or "welcome", turn on living room
+8. Keep responses short and friendly
+
+Examples:
+User: "Turn on bedroom"
+Response: "Turning on the bedroom light! Tap here: ${baseUrl}/do/bedroom/on"
+
+User: "Set a 5 minute timer to turn off kitchen"
+Response: "Setting a 5-minute timer to turn off the kitchen! Tap here: ${baseUrl}/do/timer/kitchen/300/off"
+
+User: "Turn on everything"
+Response: "Turning all devices on! Tap here: ${baseUrl}/do/all-on"`;
+
+      navigator.clipboard.writeText(prompt).then(() => {
+        toast('Gem instructions copied!', 'on');
+      }).catch(() => {
+        // Fallback: select text in a textarea
+        const ta = document.createElement('textarea');
+        ta.value = prompt;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('Gem instructions copied!', 'on');
+      });
+    };
+
+    window.testAction = function(path) {
+      window.open(path, '_blank');
+    };
 
     // Active tab
     window.switchTab = function(tab) {
@@ -1052,6 +1101,110 @@
     .e-btn:hover { box-shadow: 0 0 30px rgba(255,51,85,0.4), 0 4px 20px rgba(255,0,68,0.3); transform: translateY(-2px); }
     .e-btn:active { transform: scale(0.97); }
 
+    /* === AI CHAT === */
+    .ai-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 28px;
+      max-width: 600px;
+      backdrop-filter: blur(10px);
+    }
+    .ai-card h3 {
+      font-size: 1rem; font-weight: 700; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 8px;
+      color: var(--primary);
+    }
+    .ai-card h3 i { color: var(--accent); }
+    .ai-desc { font-size: 0.8rem; color: var(--text3); margin-bottom: 18px; }
+    .ai-chat {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      height: 320px;
+      overflow-y: auto;
+      margin-bottom: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ai-msg {
+      display: flex; align-items: flex-start; gap: 10px;
+      font-size: 0.85rem; line-height: 1.5;
+    }
+    .ai-msg i { margin-top: 3px; flex-shrink: 0; }
+    .ai-bot { color: var(--primary); }
+    .ai-bot i { color: var(--accent); }
+    .ai-user { color: var(--text); }
+    .ai-user i { color: var(--text3); }
+    .ai-thinking span { opacity: 0.6; animation: pulse-strip 1s ease-in-out infinite; }
+    .ai-input-row { display: flex; gap: 10px; margin-bottom: 12px; }
+    .ai-input {
+      flex: 1; padding: 12px 16px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text); font-size: 0.9rem;
+      font-family: 'Outfit', sans-serif;
+      outline: none; transition: var(--transition);
+    }
+    .ai-input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0,255,255,0.15); }
+    .ai-input::placeholder { color: var(--text3); }
+    .ai-send {
+      width: 48px; height: 48px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border: none; border-radius: 12px;
+      color: #0a0e1a; font-size: 1rem;
+      cursor: pointer; transition: var(--transition);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ai-send:hover { box-shadow: 0 0 20px rgba(0,255,255,0.3); transform: translateY(-2px); }
+    .ai-quick-cmds { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ai-chip {
+      padding: 7px 14px;
+      background: rgba(0,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      color: var(--text2);
+      font-size: 0.75rem; font-weight: 500;
+      cursor: pointer; transition: var(--transition);
+      font-family: 'Outfit', sans-serif;
+    }
+    .ai-chip:hover { border-color: var(--primary); color: var(--primary); background: rgba(0,255,255,0.08); }
+
+    /* Gem Setup */
+    .gem-section { margin-top: 8px; }
+    .gem-step {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 0.88rem; font-weight: 600; color: var(--text);
+      margin-bottom: 10px;
+    }
+    .step-num {
+      width: 26px; height: 26px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #0a0e1a; font-weight: 800; font-size: 0.8rem;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .gem-instructions {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+    }
+    .gem-instructions p {
+      font-size: 0.82rem; color: var(--text2); line-height: 2;
+    }
+    .gem-instructions strong { color: var(--primary); }
+    .gem-instructions em { color: var(--accent); font-style: normal; }
+    .gem-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 20px 0 8px;
+    }
+
     /* === TOAST === */
     #toasts {
       position: fixed; top: 20px; right: 20px;
@@ -1177,6 +1330,9 @@
         </button>
         <button class="nav-item" data-tab="timer" onclick="switchTab('timer')">
           <i class="fa-solid fa-clock"></i> Timer
+        </button>
+        <button class="nav-item" data-tab="ai" onclick="switchTab('ai')">
+          <i class="fa-solid fa-robot"></i> AI Control
         </button>
         <button class="nav-item danger-nav" data-tab="emergency" onclick="switchTab('emergency')">
           <i class="fa-solid fa-shield-halved"></i> Emergency
@@ -1319,8 +1475,8 @@
 
             <div class="t-action-row">
               <select id="t-action">
-                <option value="off">Turn OFF after timer</option>
-                <option value="on">Turn ON after timer</option>
+                <option value="off">Turn OFF when timer ends</option>
+                <option value="on">Turn ON when timer ends (even if currently off)</option>
               </select>
             </div>
 
@@ -1344,6 +1500,50 @@
           <h3>Emergency Stop</h3>
           <p>Immediately shut down all connected devices. Use this in case of an emergency or malfunction.</p>
           <button class="e-btn" onclick="emergencyStop()"><i class="fa-solid fa-power-off"></i> EMERGENCY STOP</button>
+        </div>
+      </div>
+
+      <!-- AI CONTROL TAB -->
+      <div class="tab-content" id="tab-ai">
+        <div class="ai-card">
+          <h3><i class="fa-solid fa-robot"></i> Gemini Mobile Setup</h3>
+          <p class="ai-desc">Control your smart home from Gemini app on your phone. One-time setup below.</p>
+
+          <div class="gem-section">
+            <div class="gem-step"><span class="step-num">1</span> <strong>Enter your server URL</strong> (use ngrok if not hosted)</div>
+            <input type="text" id="gem-base-url" class="ai-input" placeholder="https://your-server.ngrok.io" style="margin-bottom:14px">
+            
+            <div class="gem-step"><span class="step-num">2</span> <strong>Copy the Gem instructions</strong></div>
+            <button class="t-start-btn" onclick="copyGemPrompt()" style="margin-bottom:18px">
+              <i class="fa-solid fa-copy"></i> Copy Gem Instructions to Clipboard
+            </button>
+
+            <div class="gem-step"><span class="step-num">3</span> <strong>Create a Gem in Gemini app</strong></div>
+            <div class="gem-instructions">
+              <p>1. Open <strong>Gemini app</strong> on your phone</p>
+              <p>2. Tap your <strong>profile icon</strong> &rarr; <strong>Gems</strong> &rarr; <strong>New Gem</strong></p>
+              <p>3. Name it <strong>"SmartHome"</strong></p>
+              <p>4. Paste the copied instructions into the <strong>"Instructions"</strong> field</p>
+              <p>5. Tap <strong>Save</strong></p>
+              <p>6. Now just open the SmartHome Gem and say things like <em>"turn on bedroom"</em> &mdash; tap the link it gives you!</p>
+            </div>
+          </div>
+
+          <div class="gem-divider"></div>
+          <h3 style="margin-top:20px"><i class="fa-solid fa-link"></i> Quick Test Actions</h3>
+          <p class="ai-desc">Test your server URLs directly:</p>
+          <div class="ai-quick-cmds">
+            <button class="ai-chip" onclick="testAction('/do/living-room/on')">Living Room ON</button>
+            <button class="ai-chip" onclick="testAction('/do/living-room/off')">Living Room OFF</button>
+            <button class="ai-chip" onclick="testAction('/do/bedroom/on')">Bedroom ON</button>
+            <button class="ai-chip" onclick="testAction('/do/bedroom/off')">Bedroom OFF</button>
+            <button class="ai-chip" onclick="testAction('/do/kitchen/on')">Kitchen ON</button>
+            <button class="ai-chip" onclick="testAction('/do/tv/on')">TV ON</button>
+            <button class="ai-chip" onclick="testAction('/do/all-on')">All ON</button>
+            <button class="ai-chip" onclick="testAction('/do/all-off')">All OFF</button>
+            <button class="ai-chip" onclick="testAction('/do/status')">Status</button>
+            <button class="ai-chip" onclick="testAction('/do/timer/bedroom/300/off')">Timer 5m</button>
+          </div>
         </div>
       </div>
     </main>
