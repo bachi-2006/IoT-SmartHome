@@ -19,20 +19,33 @@ const express = require("express");
 const admin = require("firebase-admin");
 const { smarthome } = require("actions-on-google");
 
+const path = require("path");
+
 // ======================== CONFIG ========================
 
-const SERVICE_ACCOUNT_PATH = process.env.SERVICE_ACCOUNT || "./serviceAccountKey.json";
 const DATABASE_URL = process.env.FIREBASE_DATABASE_URL || "https://team14-iot-default-rtdb.firebaseio.com/";
 const PORT = process.env.PORT || 3000;
 
 // ======================== FIREBASE ADMIN INIT ========================
 
 try {
-  const serviceAccount = require(SERVICE_ACCOUNT_PATH);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: DATABASE_URL
-  });
+  let credential;
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    // --- Production (Render / cloud) ---
+    // Set FIREBASE_SERVICE_ACCOUNT env var to the full JSON string of your service account key
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    credential = admin.credential.cert(serviceAccount);
+    console.log("[FIREBASE] Using credentials from FIREBASE_SERVICE_ACCOUNT env var");
+  } else {
+    // --- Local development ---
+    const SERVICE_ACCOUNT_PATH = process.env.SERVICE_ACCOUNT || "./serviceAccountKey.json";
+    const serviceAccount = require(SERVICE_ACCOUNT_PATH);
+    credential = admin.credential.cert(serviceAccount);
+    console.log("[FIREBASE] Using credentials from local file");
+  }
+
+  admin.initializeApp({ credential, databaseURL: DATABASE_URL });
   console.log("[FIREBASE] Admin SDK initialized");
 } catch (err) {
   console.error("[FIREBASE] Failed to initialize:", err.message);
