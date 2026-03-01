@@ -8,6 +8,7 @@
       "led2":  { ".validate": "newData.isBoolean()" },
       "led3":  { ".validate": "newData.isBoolean()" },
       "mode":  { ".validate": "newData.isString() && newData.val().matches(/^(normal|wave|pulse|disco)$/)" },
+      "tv":   { ".validate": "newData.isBoolean()" },
       "kill":  { ".validate": "newData.isBoolean()" }
     }
   }
