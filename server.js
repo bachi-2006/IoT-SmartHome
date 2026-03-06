@@ -145,20 +145,23 @@ db.ref("smartHomeState/timer").on("value", async (snap) => {
     const remaining = Math.max(0, timer.endsAt - Date.now());
     if (remaining <= 0) {
       console.log(`[TIMER] Expired timer found, executing now`);
-      const updates = {};
-      timer.devices.forEach(d => { updates[d] = timer.action === "on"; });
-      if (timer.action === "on") updates.kill = false;
-      updates.timer = null;
-      await db.ref("smartHomeState").update(updates);
+      for (const d of timer.devices) { await db.ref(`smartHomeState/${d}`).set(timer.action === "on"); }
+      if (timer.action === "on") await db.ref("smartHomeState/kill").set(false);
+      await db.ref("smartHomeState/timer").set(null);
     } else {
+      // Immediately apply the opposite state so devices toggle now, then revert when timer ends
+      // Use individual set() per device so ESP32 receives reliable put events (not patch)
+      const immediateVal = timer.action !== "on";
+      for (const d of timer.devices) { await db.ref(`smartHomeState/${d}`).set(immediateVal); }
+      if (immediateVal) await db.ref("smartHomeState/kill").set(false);
+      console.log(`[TIMER] Immediate: turned ${immediateVal ? "ON" : "OFF"} [${timer.devices.join(',')}]`);
+
       console.log(`[TIMER] Scheduling ${timer.id} in ${Math.ceil(remaining/1000)}s — action: ${timer.action} devices: [${timer.devices.join(',')}]`);
       activeTimers[timer.id] = setTimeout(async () => {
         console.log(`[TIMER] Executing: ${timer.id} — turning ${timer.action} [${timer.devices.join(',')}]`);
-        const updates = {};
-        timer.devices.forEach(d => { updates[d] = timer.action === "on"; });
-        if (timer.action === "on") updates.kill = false;
-        updates.timer = null;
-        await db.ref("smartHomeState").update(updates);
+        for (const d of timer.devices) { await db.ref(`smartHomeState/${d}`).set(timer.action === "on"); }
+        if (timer.action === "on") await db.ref("smartHomeState/kill").set(false);
+        await db.ref("smartHomeState/timer").set(null);
         delete activeTimers[timer.id];
         console.log(`[TIMER] Done: ${timer.id} — devices set to ${timer.action}`);
       }, remaining);
@@ -483,6 +486,11 @@ app.get("/do/timer/:device/:duration/:action", async (req, res) => {
   if (!duration || duration < 1 || duration > 86400) return res.status(400).send(actionPage("Bad Duration", "Duration must be 1-86400 seconds.", false));
   if (!["on", "off"].includes(action)) return res.status(400).send(actionPage("Bad Action", "Use on or off.", false));
   try {
+    // Immediately set device to opposite state (creates ON→OFF or OFF→ON cycle)
+    const immediateVal = action !== "on";
+    await db.ref(`smartHomeState/${deviceKey}`).set(immediateVal);
+    if (immediateVal) await db.ref("smartHomeState/kill").set(false);
+
     const timerData = {
       id: "timer_" + Date.now(), devices: [deviceKey], duration, action,
       startedAt: Date.now(), endsAt: Date.now() + (duration * 1000), active: true
@@ -491,7 +499,7 @@ app.get("/do/timer/:device/:duration/:action", async (req, res) => {
     const label = DEVICE_LABELS[deviceKey];
     const mins = Math.floor(duration / 60), secs = duration % 60;
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-    res.send(actionPage(`Timer Set`, `${label} will turn ${action.toUpperCase()} in ${timeStr}.`));
+    res.send(actionPage(`Timer Set`, `${label} turned ${immediateVal ? "ON" : "OFF"} now, will turn ${action.toUpperCase()} in ${timeStr}.`));
   } catch (err) { res.status(500).send(actionPage("Error", err.message, false)); }
 });
 
@@ -502,6 +510,11 @@ app.get("/do/timer-all/:duration/:action", async (req, res) => {
   if (!duration || duration < 1 || duration > 86400) return res.status(400).send(actionPage("Bad Duration", "Duration must be 1-86400 seconds.", false));
   if (!["on", "off"].includes(action)) return res.status(400).send(actionPage("Bad Action", "Use on or off.", false));
   try {
+    // Immediately set all devices to opposite state (creates ON→OFF or OFF→ON cycle)
+    const immediateVal = action !== "on";
+    for (const d of ["led1", "led2", "led3", "tv"]) { await db.ref(`smartHomeState/${d}`).set(immediateVal); }
+    if (immediateVal) await db.ref("smartHomeState/kill").set(false);
+
     const timerData = {
       id: "timer_" + Date.now(), devices: ["led1", "led2", "led3", "tv"], duration, action,
       startedAt: Date.now(), endsAt: Date.now() + (duration * 1000), active: true
@@ -509,7 +522,7 @@ app.get("/do/timer-all/:duration/:action", async (req, res) => {
     await db.ref("smartHomeState/timer").set(timerData);
     const mins = Math.floor(duration / 60), secs = duration % 60;
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-    res.send(actionPage(`Timer Set`, `All devices will turn ${action.toUpperCase()} in ${timeStr}.`));
+    res.send(actionPage(`Timer Set`, `All devices turned ${immediateVal ? "ON" : "OFF"} now, will turn ${action.toUpperCase()} in ${timeStr}.`));
   } catch (err) { res.status(500).send(actionPage("Error", err.message, false)); }
 });
 

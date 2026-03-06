@@ -108,8 +108,14 @@
         active: true
       };
 
+      // Immediately set devices to opposite state (creates ON→OFF or OFF→ON cycle)
+      // Use individual set() calls per device so ESP32 receives reliable put events
+      const immediateVal = act !== 'on';
+      for (const d of devs) { await set(ref(db, `smartHomeState/${d}`), immediateVal); }
+      if (immediateVal) await set(ref(db, "smartHomeState/kill"), false);
+
       await set(ref(db, "smartHomeState/timer"), timerData);
-      toast(`Timer: ${fmtDur(dur)}`, 'on');
+      toast(`Timer: ${fmtDur(dur)} — devices ${act !== 'on' ? 'ON' : 'OFF'} now, ${act === 'on' ? 'ON' : 'OFF'} when done`, 'on');
     };
 
     window.cancelTimer = async function() {
