@@ -87,6 +87,7 @@
     // ---- Timer (synced via main Firebase listener) ----
     let countdownInterval = null;
     let currentTimerData = null;
+    const executedTimerIds = new Set();
 
     window.startTimer = async function() {
       const devs = [...document.querySelectorAll('.t-check:checked')].map(c => c.value);
@@ -162,11 +163,22 @@
     }
 
     async function executeTimerAction(timer) {
-      // Server handles the actual device state changes.
-      // Client only updates UI to avoid race conditions.
+      if (!timer || !timer.id || executedTimerIds.has(timer.id)) return;
+      executedTimerIds.add(timer.id);
+
+      const up = {};
+      for (const d of timer.devices || []) up[d] = timer.action === 'on';
+      if (timer.action === 'on') up.kill = false;
+
       stopCountdown();
-      renderTimer(null);
-      toast(`Timer done — devices ${timer.action === 'on' ? 'ON' : 'OFF'}`, timer.action === 'on' ? 'on' : 'off');
+      try {
+        await update(ref(db, "smartHomeState"), up);
+        await set(ref(db, "smartHomeState/timer"), null);
+        renderTimer(null);
+        toast(`Timer done — devices ${timer.action === 'on' ? 'ON' : 'OFF'}`, timer.action === 'on' ? 'on' : 'off');
+      } finally {
+        setTimeout(() => executedTimerIds.delete(timer.id), 5000);
+      }
     }
 
     function renderTimer(t) {
